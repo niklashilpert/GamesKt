@@ -1,3 +1,6 @@
-fun main(args: Array<String>) {
+import server.GameServer
 
+fun main() {
+    println("Listening...")
+    GameServer.listen()
 }

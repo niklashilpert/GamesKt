@@ -1,32 +1,39 @@
 package server
 
+import java.io.Closeable
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.net.Socket
 
-class Connection(private val socket: Socket) {
-    private val dataIn = ObjectInputStream(socket.getInputStream())
-    private val dataOut = ObjectOutputStream(socket.getOutputStream())
+class Connection(private val socket: Socket) : Closeable {
+    private val dataIn: ObjectInputStream = ObjectInputStream(socket.getInputStream())
+    private val dataOut: ObjectOutputStream = ObjectOutputStream(socket.getOutputStream())
 
-    var name: String? = null
+    private var closed = false
+    val isClosed get() = closed
 
-    fun send(data: DataPacket) {
+    /**
+     * Writes a DataPacket to the connection's output stream.
+     * @throws IOException If an exception occurred while trying to write the packet.
+     */
+    fun send(data: InetPacket) {
         dataOut.writeObject(data)
     }
 
-    fun read(): DataPacket? {
-        try {
-            val packet = dataIn.readObject() as DataPacket
-            return packet
-        } catch (e: Exception) {
-            return null
-        }
+    /**
+     * Reads an object from the connection's input stream.
+     * @return The DataPacket that was read from the input stream.
+     * @throws IOException If an exception occurred while trying to read data from the input stream.
+     * @throws ClassNotFoundException If the read data is not of type DataPacket.
+     */
+    fun read(): InetPacket {
+        return dataIn.readObject() as InetPacket
     }
 
-    fun close() {
+    override fun close() {
+        closed = true
         dataOut.close()
         dataIn.close()
         socket.close()
     }
-
 }

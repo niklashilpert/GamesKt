@@ -25,6 +25,7 @@ C: Init
 C: LobbyConnect(player name, lobby name)
 S: LobbyInfo(connected players, properties of the lobby, host player)
 
-
-
+Connect
+Info
+UpdateSetting (which client is what player etc.)
 
