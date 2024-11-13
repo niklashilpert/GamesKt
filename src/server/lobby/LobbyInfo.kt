@@ -1,12 +1,5 @@
 package server.lobby
 
-import java.io.Serializable
-
-abstract class LobbyInfo(
-    val lobbyName: String,
-    val isRunning: Boolean,
-    val host: String,
-) : Serializable
 
 class ChessLobbyInfo(
     lobbyName: String,
@@ -14,7 +7,7 @@ class ChessLobbyInfo(
     hostName: String,
     val playerWhiteName: String?,
     val playerBlackName: String?,
-) : LobbyInfo(
+) : Lobby2.Info(
     lobbyName,
     isRunning,
     hostName

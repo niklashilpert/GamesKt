@@ -1,12 +1,7 @@
-package server.lobby
-
-import server.Client
-import server.InetPacket
-import server.Message
-import java.io.IOException
+package game.chess
 
 
-class ChessLobby(lobbyName: String, host: Client) : Lobby(lobbyName, host) {
+/*class ChessLobby(lobbyName: String, host: Client) : Lobby(lobbyName, host) {
     private val playerLock = Any()
 
     private var playerWhite: Client? = host
@@ -80,13 +75,13 @@ class ChessLobby(lobbyName: String, host: Client) : Lobby(lobbyName, host) {
         }
     }
 
-    private fun getInfo(): ChessLobbyInfo {
+    private fun getInfoPacket(): ChessLobbyInfo {
         return ChessLobbyInfo(name, isRunning, host.name, playerWhite?.name, playerBlack?.name)
     }
 
     private fun updateClients() {
         synchronized(playerLock) {
-            val lobbyInfo = InetPacket.LobbyStatus(getInfo())
+            val lobbyInfo = InetPacket.LobbyStatus(getInfoPacket())
             playerWhite?.send(lobbyInfo)
             playerBlack?.send(lobbyInfo)
         }
@@ -115,4 +110,4 @@ class ChessLobby(lobbyName: String, host: Client) : Lobby(lobbyName, host) {
         }
         updateClients()
     }
-}
+}*/

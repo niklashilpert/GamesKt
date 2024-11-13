@@ -5,7 +5,7 @@ import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.net.Socket
 
-class Connection(private val socket: Socket) : Closeable {
+class ClientHandle(private val socket: Socket) : Closeable {
     private val dataIn: ObjectInputStream = ObjectInputStream(socket.getInputStream())
     private val dataOut: ObjectOutputStream = ObjectOutputStream(socket.getOutputStream())
 

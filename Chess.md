@@ -12,7 +12,7 @@ Der Spielmodus wird auch mit einer Property erstellt.
 
 Properties werden als Objekte in einer HashMap gespeichert.
 Beispielattribute:
-- type: "chess"
+- type: "game.chess"
 - white: Connection
 - black: Connection
 

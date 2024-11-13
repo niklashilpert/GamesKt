@@ -1,18 +1,20 @@
 package server
 
+import server.lobby.Lobby
 import java.io.Closeable
 import java.io.IOException
 import java.io.Serializable
 
-class Client(private val connection: Connection, val name: String) : Serializable, Closeable {
+class Player(private val client: ClientHandle, val name: String, val lobby: Lobby) : Serializable, Closeable {
     private var keepListening = true
     private var sendLock = Any()
+
     /**
      * Sends the InetPacket to the client. This call is synchronized.
      */
     fun send(data: InetPacket) {
         synchronized(sendLock) {
-            connection.send(data)
+            client.send(data)
         }
     }
 
@@ -21,8 +23,8 @@ class Client(private val connection: Connection, val name: String) : Serializabl
      */
     override fun close() {
         keepListening = false
-        if (!connection.isClosed) {
-            connection.close()
+        if (!client.isClosed) {
+            client.close()
         }
     }
 
@@ -30,7 +32,7 @@ class Client(private val connection: Connection, val name: String) : Serializabl
         Thread {
             while(keepListening) {
                 try {
-                    val packet = connection.read()
+                    val packet = client.read()
                     handleMessageFunction(Message(this, packet))
                 } catch (e: IOException) {
                     close()
