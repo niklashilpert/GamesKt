@@ -87,7 +87,7 @@ class TicTacToeLobby2(name: String, host: Player) : TwoPlayerLobby(name, host) {
         }
     }
 
-    override fun stopGame() {
+    override fun handleGameStop() {
         _isRunning.set(false)
         ticTacToe = null
         updateClients()

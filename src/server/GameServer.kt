@@ -34,12 +34,12 @@ object GameServer {
                 val lobbyList = lobbyMap[packet.gameType]!!
                 val lobby = lobbyList.find { it.name == packet.lobbyName }
                 if (lobby != null) {
-                    val player = Player(connection, packet.playerName, lobby)
-                    lobby.scheduleJoin(player)
+                    val player = Player(connection, packet.playerName)
+                    lobby.queueJoin(player)
                 } else {
                     val newLobby = createLobby(packet.gameType, packet.lobbyName)
-                    val player = Player(connection, packet.playerName, lobby)
-                    newLobby.scheduleJoin(player)
+                    val player = Player(connection, packet.playerName)
+                    newLobby.queueJoin(player)
                     println("Created new lobby")
                     lobbyList.add(newLobby)
                 }

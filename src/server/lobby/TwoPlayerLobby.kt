@@ -1,97 +1,76 @@
 package server.lobby
 
+import server.DataPacket
 import server.Player
 import server.InetPacket
-import server.Message
 
-abstract class TwoPlayerLobby(name: String, host: Player) : Lobby2(name, host) {
-    protected val playerLock = Any()
-    protected var player1: Player? = host
-    protected var player2: Player? = null
+abstract class TwoPlayerLobby(name: String) : Lobby(name, 2) {
+    protected inner class PlayerSwapTask(source: Player) : Task(source, ::performPlayerSwap)
 
-    init {
-        updateClients()
-    }
+    var player0: Player? = null
+        private set
+    var player1: Player? = null
+        private set
 
-    protected fun isFull() = player1 != null && player2 != null
-
-    override fun onMessageReceivedWhileOpen(message: Message) {
-        println("${message.source.name} -> ${message.packet}")
-
-        if (message.source == host) {
-            when (message.packet) {
+    override fun handleIncomingPacket(packet: DataPacket, source: Player): Boolean {
+        return if (!super.handleIncomingPacket(packet, source)) {
+            when (packet) {
                 is InetPacket.SwapPlayers -> {
-                    synchronized(playerLock) {
-                        val temp = player1
-                        player1 = player2
-                        player2 = temp
-                        updateClients(false)
-                    }
+                    queuePlayerSwap(source)
+                    true
                 }
-                else -> message.source.send(InetPacket.IllegalPacket())
+                else -> false
+            }
+        } else true
+    }
+
+    private fun queuePlayerSwap(source: Player) {
+        taskQueue.put(PlayerSwapTask(source))
+    }
+
+    private fun performPlayerSwap(source: Player) {
+        doIfHost(source) {
+            if (isOpen) {
+                val tmp = player0
+                player0 = player1
+                player1 = tmp
             }
         }
     }
 
-    override fun addClient(client: Player): PlayerAddResult {
-        synchronized(playerLock) {
-            return if (isRunning) {
-                PlayerAddResult.ERR_RUNNING
-            } else if (player1?.name == client.name || player2?.name == client.name) {
-                PlayerAddResult.ERR_PLAYER_EXISTS
-            } else if (player1 == null) {
-                player1 = client
-                updateClients(false)
-                PlayerAddResult.SUCCESS
-            } else if (player2 == null) {
-                player2 = client
-                updateClients(false)
-                PlayerAddResult.SUCCESS
-            } else {
-                PlayerAddResult.ERR_FULL
-            }
-        }
-    }
-
-    override fun removeClient(client: Player) {
-        synchronized(playerLock) {
-            if (client == host) {
-                if (host == player1 && player2 != null) {
-                    host = player2!!
-                } else if (host == player2 && player1 != null) {
-                    host = player1!!
-                }
-            }
-
-            if (client == player1) {
-                player1?.close()
-                player1 = null
-            } else {
-                player2?.close()
-                player2 = null
-            }
-
-            if (player1 == null && player2 == null) {
-                terminateLobby()
-            } else {
-                updateClients(false)
-            }
-        }
-    }
-
-    final override fun updateClients(synchronized: Boolean) {
-        if (synchronized) {
-            synchronized(playerLock) {
-                updateClientsUnsafe()
-            }
+    override fun put(player: Player) {
+        if (player0 != null) {
+            player0 = player
         } else {
-            updateClientsUnsafe()
+            player1 = player
         }
     }
 
-    private fun updateClientsUnsafe() {
-        val lobbyInfo = getInfoPacket()
-        player1?.send(lobbyInfo)
-        player2?.send(lobbyInfo)
+    override fun pop(player: Player) {
+        if (player0 == player) {
+            player0 = null
+        } else if (player1 == player) {
+            player1 = null
+        }
+    }
+
+    override fun isFull(): Boolean {
+        return player0 != null && player1 != null
+    }
+
+    override fun getFirstPlayer(): Player? {
+        if (player0 != null) {
+            return player0
+        }
+        return player1
+    }
+
+    override fun findPlayerWithName(name: String): Player? {
+        if (player0?.name == name) {
+            return player0
+        } else if (player1?.name == name) {
+            return player1
+        }
+        return null
     }
 }
