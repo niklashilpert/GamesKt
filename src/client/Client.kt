@@ -18,18 +18,17 @@ fun main(args: Array<String>) {
     val dataOut = ObjectOutputStream(socket.getOutputStream())
     val dataIn = ObjectInputStream(socket.getInputStream())
 
-    dataOut.writeObject(InetPacket.Connect(name, "SuperLobby", GameType.TICTACTOE))
+    dataOut.writeObject(InetPacket.Connect(name, "SuperLobby", GameType.TIC_TAC_TOE))
 
     Thread {
         try {
             while (true) {
                 val packet = dataIn.readObject() as InetPacket
-                if (packet is TicTacToePackets.LobbyStatus) {
+                if (packet is TicTacToePackets.LobbyInfo) {
                     val info = packet.lobbyInfo
-                    if (info.isRunning) {
-                        val inGameInfo = info.inGameInfo
-                        println("Running: ${info.lobbyName}[${info.host}] - ${info.playerXName} vs. ${info.playerOName}")
-                        println(inGameInfo)
+                    if (!info.isOpen) {
+                        val inGameInfo = info.ticTacToeInfo
+                        println("Running: ${info.lobbyName}[${info.host}] - ${info.player1} vs. ${info.player2}")
                         printBoard(inGameInfo!!.board)
                         if (inGameInfo.tie) {
                             println("TIE")
@@ -37,13 +36,13 @@ fun main(args: Array<String>) {
                             println("X WON")
                         } else if (inGameInfo.oWon) {
                             println("O WON")
-                        } else if (inGameInfo.currentPlayer == name) {
+                        } else if (inGameInfo.currentPlayerIsX == (name == info.player1)) {
                             println("Your turn")
                         } else {
                             println("Enemy's turn")
                         }
                     } else {
-                        println("${info.lobbyName}, ${info.isRunning}, ${info.host}, ${info.playerXName}, ${info.playerOName}")
+                        println("${info.lobbyName}, ${info.isOpen}, ${info.host}, ${info.player1}, ${info.player2}")
                     }
 
 
@@ -52,6 +51,7 @@ fun main(args: Array<String>) {
                 }
             }
         } catch (e: IOException) {
+            e.printStackTrace()
             println("Stopping thread")
         }
     }.start()
@@ -66,7 +66,7 @@ fun main(args: Array<String>) {
                 socket.close()
             }
             "start" -> dataOut.writeObject(InetPacket.StartGame())
-            "stop" -> dataOut.writeObject(InetPacket.StartGame())
+            "stop" -> dataOut.writeObject(InetPacket.StopGame())
             else -> {
                 if (cmd.startsWith("place")) {
                     val parts = cmd.split(" ")
@@ -78,7 +78,7 @@ fun main(args: Array<String>) {
 
 }
 
-fun printBoard(board: Array<Array<Int>>) {
+fun printBoard(board: Array<IntArray>) {
     println("${board[0][0]} ${board[0][1]} ${board[0][2]}")
     println("${board[1][0]} ${board[1][1]} ${board[1][2]}")
     println("${board[2][0]} ${board[2][1]} ${board[2][2]}")

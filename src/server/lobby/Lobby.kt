@@ -2,8 +2,15 @@ package server.lobby
 
 import server.*
 import java.io.IOException
+import java.io.Serializable
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
+
+enum class GameType {
+    CHESS,
+    CHECKERS,
+    TIC_TAC_TOE
+}
 
 fun createLobby(type: GameType, name: String) : Lobby {
     return when (type) {
@@ -13,44 +20,47 @@ fun createLobby(type: GameType, name: String) : Lobby {
         GameType.CHECKERS -> {
             TODO("Checkers is not implemented yet")
         }
-        GameType.TICTACTOE -> {
+        GameType.TIC_TAC_TOE -> {
             TicTacToeLobby(name)
         }
     }
 }
 
 
-abstract class Lobby(val name: String, private val maxPlayerCount: Int) {
-    abstract inner class Task(val source: Player, val perform: (Player) -> Unit)
+abstract class Lobby internal constructor(val name: String, private val maxPlayerCount: Int) {
+    abstract class Info(val lobbyName: String, val isOpen: Boolean, val host: String?) : Serializable
+
+    abstract inner class Task(val source: Player, val perform: (Task) -> Boolean)
     protected inner class JoinTask(source: Player) : Task(source, ::performJoin)
     protected inner class LeaveTask(source: Player) : Task(source, ::performLeave)
     protected inner class StartGameTask(source: Player) : Task(source, ::performStartGame)
     protected inner class StopGameTask(source: Player) : Task(source, ::performStopGame)
+    protected inner class UpdatePlayerTask(source: Player): Task(source, ::performPlayerUpdate)
 
     private var _isOpen = AtomicBoolean(true)
     var isOpen
         get() = _isOpen.get()
         protected set(value) = _isOpen.set(value)
 
-
     protected val taskQueue = LinkedBlockingQueue<Task>()
+    protected var host: Player? = null
 
-    private var host: Player? = null
     private var keepTaskThreadRunning = AtomicBoolean(true)
-    private val taskThread: Thread = createTaskHandlerThread()
+    private val taskThread: Thread = createTaskHandlerThread().also { it.start() }
 
     private fun createTaskHandlerThread(): Thread {
         return Thread {
             while(keepTaskThreadRunning.get()) {
                 try {
                     val nextTask = taskQueue.take()
-                    nextTask.perform(nextTask.source)
-                    notifyPlayers()
+                    log("Next task in queue: ${nextTask.javaClass.simpleName}")
+                    val notify = nextTask.perform(nextTask)
+                    if (notify) notifyPlayers()
                 } catch (e: InterruptedException) {
                     keepTaskThreadRunning.set(false)
                 }
             }
-            println("Stopping task handling thread for lobby $name.")
+            log("Stopping task handling thread for lobby $name.")
         }
     }
 
@@ -68,10 +78,10 @@ abstract class Lobby(val name: String, private val maxPlayerCount: Int) {
                     }
                 } catch (e: IOException) {
                     player.close()
-                    queueLeave(player)
                 }
             }
-            println("Stopped player listening thread for ${player.name}")
+            log("Stopped player listening thread for ${player.name}")
+            queueLeave(player)
         }
     }
 
@@ -111,7 +121,10 @@ abstract class Lobby(val name: String, private val maxPlayerCount: Int) {
      * Queues a player leave task.
      */
     protected fun queueLeave(player: Player) {
-        taskQueue.put(LeaveTask(player))
+        val isNotMarkedForDeletion = taskQueue.find { it is LeaveTask && it.source == player } == null
+        if (isNotMarkedForDeletion) {
+            taskQueue.put(LeaveTask(player))
+        }
     }
 
     /**
@@ -133,24 +146,29 @@ abstract class Lobby(val name: String, private val maxPlayerCount: Int) {
      * Adds the player to the players list if it is allowed.
      * The player will be notified if it can't join the lobby.
      */
-    private fun performJoin(player: Player) {
-        if (findPlayerWithName(player.name) != null) {
-            player.send(InetPacket.PlayerExists())
-            player.close()
+    private fun performJoin(task: Task): Boolean {
+        val source = task.source
+        if (getPlayers().find { it.name == source.name } != null) {
+            source.send(InetPacket.PlayerExists())
+            source.close()
+            return false
         } else if (isFull()) {
-            player.send(InetPacket.LobbyIsFull())
-            player.close()
+            source.send(InetPacket.LobbyIsFull())
+            source.close()
+            return false
         } else if (!isOpen) {
-            player.send(InetPacket.LobbyIsPlaying())
-            player.close()
+            source.send(InetPacket.LobbyIsPlaying())
+            source.close()
+            return false
         } else {
             if (host == null) {
-                host = player
+                host = source
             }
-            createPlayerListeningThread(player).start()
-            player.send(InetPacket.Success())
-            put(player)
-            println("Player ${player.name} joined lobby $name.")
+            createPlayerListeningThread(source).start()
+            source.send(InetPacket.Success())
+            put(source)
+            log("Player ${source.name} joined lobby $name.")
+            return true
         }
     }
 
@@ -160,50 +178,84 @@ abstract class Lobby(val name: String, private val maxPlayerCount: Int) {
      * If they are the last player in the lobby, it will be terminated.
      * If the lobby's game was in progress, it is interrupted and the lobby returns to the open state.
      */
-    private fun performLeave(player: Player) {
+    private fun performLeave(task: Task): Boolean {
         if (!isOpen) performStopGameUnchecked()
-        pop(player)
-        println("Player ${player.name} left lobby $name.")
-        if (player == host) {
-            host = getFirstPlayer()
-            if (host != null) {
-                println("Player ${player.name} is now host of lobby $name.")
-            } else {
-                terminateLobby()
+        val source = task.source
+        if (getPlayers().contains(source)) {
+            pop(source)
+            log("Player ${source.name} left lobby $name.")
+            if (source == host) {
+                host = getPlayers().getOrNull(0)
+                if (host != null) {
+                    log("Player ${host!!.name} is now host of lobby $name.")
+                } else {
+                    terminateLobby()
+                }
             }
+            return true
         }
+        return false
     }
 
     /**
      * Tries to start the game if it can.
      * Sends an error to back to the client if it can't start.
      */
-    private fun performStartGame(source: Player) {
-        if (isFull()) {
-            handleGameStart()
-        } else {
-            try {
-                source.send(InetPacket.CannotStartGame())
-            } catch (e: IOException) {
-                source.close()
-                queueLeave(source)
+    private fun performStartGame(task: Task): Boolean {
+        val source = task.source
+
+        return handleIfHost(source) {
+            if (!isOpen) return@handleIfHost false
+            if (isFull()) {
+                log("Starting game")
+                isOpen = false
+                handleGameStart()
+                return@handleIfHost true
+            } else {
+                try {
+                    source.send(InetPacket.CannotStartGame())
+                } catch (e: IOException) {
+                    source.close()
+                }
+                return@handleIfHost false
             }
         }
     }
     
-    private fun performStopGame(source: Player) {
-        doIfHost(source) {
+    private fun performStopGame(task: Task): Boolean {
+        return handleIfHost(task.source) {
+            if (isOpen) return@handleIfHost false
             performStopGameUnchecked()
+            return@handleIfHost true
         }
     }
-    
-    private fun performStopGameUnchecked() {
+
+    protected fun performStopGameUnchecked() {
+        log("Stopping game")
         handleGameStop()
         isOpen = true
     }
 
+    private fun performPlayerUpdate(task: Task): Boolean {
+        log("Updating ${task.source.name}")
+        notifyPlayer(task.source)
+        return false
+    }
+
+    /**
+     * Performs the operations that are required for a specific game to start.
+     */
     protected abstract fun handleGameStart()
+
+    /**
+     * Performs the operations that are required for a specific game to stop.
+     */
     protected abstract fun handleGameStop()
+
+    /**
+     * Returns a LobbyInfo packet that can be sent to notify clients abount updates.
+     */
+    protected abstract fun getLobbyInfoPacket(): InetPacket.LobbyInfo
 
     /**
      * Stores the player in an implementation specific object.
@@ -218,11 +270,34 @@ abstract class Lobby(val name: String, private val maxPlayerCount: Int) {
     /**
      * Notifies all stored players.
      */
-    protected abstract fun notifyPlayers()
-    protected abstract fun getFirstPlayer(): Player?
-    protected abstract fun isFull(): Boolean
-    protected abstract fun findPlayerWithName(name: String): Player?
+    private fun notifyPlayers() {
+        for (player in getPlayers()) {
+            notifyPlayer(player)
+        }
+    }
 
+    private fun notifyPlayer(player: Player) {
+        if (!player.isClosed) {
+            log("Notifying player")
+            try {
+                player.send(getLobbyInfoPacket())
+            } catch (e: IOException) {
+                player.close()
+            }
+        }
+    }
+
+    /**
+     * Returns a list of all registered players.
+     */
+    protected abstract fun getPlayers(): List<Player>
+
+    /**
+     * Returns whether the maximum player amount has been reached.
+     */
+    protected fun isFull(): Boolean {
+        return getPlayers().size == maxPlayerCount
+    }
 
     /**
      * Only performs the provided action if the player is the host of the lobby.
@@ -230,11 +305,36 @@ abstract class Lobby(val name: String, private val maxPlayerCount: Int) {
      *
      * If the provided player is null, the action is executed.
      */
-    protected fun doIfHost(player: Player, action: (Player) -> Unit) {
+    protected fun handleIfHost(player: Player, action: (Player) -> Boolean): Boolean {
         if (player == host) {
-            action(player)
+            return action(player)
         } else {
             player.send(InetPacket.NotAuthorized())
+            return false
+        }
+    }
+
+    /**
+     * This function returns false if the lobby is open. Will execute the action and return true otherwise.
+     */
+    protected fun handleIfRunning(source: Player, action: () -> Boolean): Boolean {
+        return if (!isOpen) {
+            action()
+            true
+        } else {
+            false
+        }
+    }
+
+    /**
+     * This function returns false if the game is running. Will execute the action and return true otherwise.
+     */
+    protected fun handleIfOpen(source: Player, action: () -> Boolean): Boolean {
+        return if (isOpen) {
+            action()
+            true
+        } else {
+            false
         }
     }
 
@@ -247,4 +347,8 @@ abstract class Lobby(val name: String, private val maxPlayerCount: Int) {
         GameServer.removeLobby(this)
     }
 
+    protected fun log(msg: String) {
+        println("[$name] $msg")
+    }
+    
 }

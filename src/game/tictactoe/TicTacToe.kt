@@ -1,5 +1,7 @@
 package game.tictactoe
 
+import java.io.Serializable
+
 class TicTacToe {
     enum class Status {
         TIE,
@@ -8,15 +10,36 @@ class TicTacToe {
         IN_PROGRESS,
     }
 
-    val board = Array(3) { arrayOf(0, 0, 0) }
+    class Info(
+        val board: Array<IntArray>,
+        val currentPlayerIsX: Boolean,
+        val xWon: Boolean,
+        val oWon: Boolean,
+        val tie: Boolean,
+        val inProgress: Boolean
+    ) : Serializable
+
+    fun getInfo(): Info {
+        val gameStatus = checkGameStatus()
+        return Info(
+            board = board,
+            currentPlayerIsX = currentPlayerIsX,
+            xWon = gameStatus == Status.X_WON,
+            oWon = gameStatus == Status.O_WON,
+            tie = gameStatus == Status.TIE,
+            inProgress = gameStatus == Status.IN_PROGRESS
+        )
+    }
+
+    val board = Array(3) { intArrayOf(0, 0, 0) }
 
     var _currentPlayerIsX = true
     val currentPlayerIsX get() = _currentPlayerIsX
 
     fun placeMark(x: Int, y: Int): Boolean {
         if (inBounds(x, y)) {
-            if (board[y][x] == 0) {
-                board[y][x] = if (currentPlayerIsX) 1 else -1
+            if (board[x][y] == 0) {
+                board[x][y] = if (currentPlayerIsX) 1 else -1
                 _currentPlayerIsX = !_currentPlayerIsX
                 return true
             }

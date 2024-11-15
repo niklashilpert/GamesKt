@@ -1,7 +1,7 @@
 package server
 
-import game.tictactoe.TicTacToeLobby2
 import server.lobby.GameType
+import server.lobby.TicTacToeLobby
 import java.io.Serializable
 
 
@@ -30,16 +30,16 @@ abstract class InetPacket : DataPacket(), Serializable {
 
     class Success : InetPacket()
     class NotYourTurn : InetPacket()
-    class SpaceIsOccupied : InetPacket()
+    class NotAValidLocation : InetPacket()
 }
 
 
 abstract class TicTacToePackets {
     // Sent from server
-    class LobbyStatus(val lobbyInfo: TicTacToeLobby2.Info) : InetPacket.LobbyInfo()
+    class LobbyInfo(val lobbyInfo: TicTacToeLobby.Info) : InetPacket.LobbyInfo()
 
     // Send from client
     class PlaceMark(val x: Int, val y: Int) : InetPacket()
+    class CannotPlaceAfterEnd : InetPacket()
 }
 
-class Message(val source: Player, val packet: DataPacket)

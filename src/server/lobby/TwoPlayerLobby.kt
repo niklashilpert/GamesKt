@@ -5,20 +5,31 @@ import server.Player
 import server.InetPacket
 
 abstract class TwoPlayerLobby(name: String) : Lobby(name, 2) {
+    abstract class Info(
+        lobbyName: String,
+        isOpen: Boolean,
+        host: String?,
+        val player1: String?,
+        val player2: String?
+    ) : Lobby.Info(lobbyName, isOpen, host)
+
     protected inner class PlayerSwapTask(source: Player) : Task(source, ::performPlayerSwap)
 
-    var player0: Player? = null
-        private set
     var player1: Player? = null
+        private set
+    var player2: Player? = null
         private set
 
     override fun handleIncomingPacket(packet: DataPacket, source: Player): Boolean {
         return if (!super.handleIncomingPacket(packet, source)) {
             when (packet) {
                 is InetPacket.SwapPlayers -> {
-                    queuePlayerSwap(source)
-                    true
+                    handleIfOpen(source) {
+                        queuePlayerSwap(source)
+                        true
+                    }
                 }
+
                 else -> false
             }
         } else true
@@ -28,49 +39,41 @@ abstract class TwoPlayerLobby(name: String) : Lobby(name, 2) {
         taskQueue.put(PlayerSwapTask(source))
     }
 
-    private fun performPlayerSwap(source: Player) {
-        doIfHost(source) {
-            if (isOpen) {
-                val tmp = player0
-                player0 = player1
-                player1 = tmp
+    private fun performPlayerSwap(task: Task): Boolean {
+        return handleIfHost(task.source) {
+            handleIfOpen(task.source) {
+                val tmp = player1
+                player1 = player2
+                player2 = tmp
+                true
             }
         }
     }
 
     override fun put(player: Player) {
-        if (player0 != null) {
-            player0 = player
-        } else {
+        if (player1 == null) {
             player1 = player
+        } else {
+            player2 = player
         }
     }
 
     override fun pop(player: Player) {
-        if (player0 == player) {
-            player0 = null
-        } else if (player1 == player) {
+        if (player1 == player) {
             player1 = null
+        } else if (player2 == player) {
+            player2 = null
         }
     }
 
-    override fun isFull(): Boolean {
-        return player0 != null && player1 != null
-    }
-
-    override fun getFirstPlayer(): Player? {
-        if (player0 != null) {
-            return player0
+    override fun getPlayers(): List<Player> {
+        val playerList = mutableListOf<Player>()
+        if (player1 != null) {
+            playerList.add(player1!!)
         }
-        return player1
-    }
-
-    override fun findPlayerWithName(name: String): Player? {
-        if (player0?.name == name) {
-            return player0
-        } else if (player1?.name == name) {
-            return player1
+        if (player2 != null) {
+            playerList.add(player2!!)
         }
-        return null
+        return playerList
     }
 }

@@ -40,7 +40,7 @@ object GameServer {
                     val newLobby = createLobby(packet.gameType, packet.lobbyName)
                     val player = Player(connection, packet.playerName)
                     newLobby.queueJoin(player)
-                    println("Created new lobby")
+                    println("Created new lobby \"${newLobby.name}\"")
                     lobbyList.add(newLobby)
                 }
             } else {

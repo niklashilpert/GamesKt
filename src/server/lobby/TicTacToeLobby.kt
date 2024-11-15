@@ -1,75 +1,77 @@
 package server.lobby
 
+import client.printBoard
 import game.tictactoe.TicTacToe
 import server.DataPacket
 import server.InetPacket
 import server.Player
 import server.TicTacToePackets
-import java.io.IOException
 
 class TicTacToeLobby(name: String) : TwoPlayerLobby(name) {
+    class Info (
+        lobbyName: String,
+        isOpen: Boolean,
+        hostName: String?,
+        player1: String?,
+        player2: String?,
+        val ticTacToeInfo: TicTacToe.Info?,
+    ) : TwoPlayerLobby.Info(lobbyName, isOpen, hostName, player1, player2)
+
+    private inner class MarkPlacementTask(source: Player, val x: Int, val y: Int) : Task(source, ::performMarkPlacement)
 
     private var ticTacToe: TicTacToe? = null
 
     override fun handleIncomingPacket(packet: DataPacket, source: Player): Boolean {
-        return when (packet) {
-            is TicTacToePackets.PlaceMark -> {
-                handleIfRunning {
-                    handlePlaceMarkAction(source, packet.x, packet.y)
+        return if (!super.handleIncomingPacket(packet, source)) {
+            when (packet) {
+                is TicTacToePackets.PlaceMark -> {
+                    scheduleMarkPlacement(source, packet.x, packet.y)
+                    true
                 }
+                else -> false
             }
-            else -> {
+        } else true
+    }
+
+    private fun scheduleMarkPlacement(source: Player, x: Int, y: Int) {
+        taskQueue.put(MarkPlacementTask(source, x, y))
+    }
+
+    private fun performMarkPlacement(task: Task): Boolean {
+        return handleIfRunning(task.source) {
+            if (task is MarkPlacementTask) {
+                val source = task.source
+                if (ticTacToe!!.checkGameStatus() == TicTacToe.Status.IN_PROGRESS) {
+                    val isSourcesTurn = ticTacToe!!.currentPlayerIsX == (source == player1)
+                    log("Is Source's turn: $isSourcesTurn")
+                    if (isSourcesTurn) {
+                        val result = ticTacToe!!.placeMark(task.x, task.y)
+                        if (result) {
+                            return@handleIfRunning true
+                        } else {
+                            source.send(InetPacket.NotAValidLocation())
+                        }
+                    } else {
+                        source.send(InetPacket.NotYourTurn())
+                    }
+                } else {
+                    source.send(TicTacToePackets.CannotPlaceAfterEnd())
+                }
                 false
-            }
-        }
-    }
-
-    private fun handlePlaceMarkAction(source: Player, x: Int, y: Int) {
-        return if (ticTacToe!!.currentPlayerIsX == (source == player1)) {
-            val result = ticTacToe!!.placeMark(x, y)
-            if (result) {
-                notifyPlayers()
             } else {
-                source.send(InetPacket.SpaceIsOccupied())
+                throw IllegalArgumentException("Task is not a MarkPlacementTask")
             }
-        } else {
-            source.send(InetPacket.NotYourTurn())
         }
     }
 
-    private fun handleIfRunning(action: () -> Unit): Boolean {
-        return if (!isOpen) {
-            action()
-            true
-        } else {
-            false
+    override fun getLobbyInfoPacket(): InetPacket.LobbyInfo {
+        if (ticTacToe != null) {
+            printBoard(ticTacToe!!.getInfo().board)
         }
-    }
 
-    override fun notifyPlayers() {
-        if (player0 != null && !player0!!.isClosed) {
-            notifyPlayer(player0!!)
-        }
-        if (player1 != null && !player1!!.isClosed) {
-            notifyPlayer(player1!!)
-        }
-    }
-
-    override fun getPlayerWithName(name: String): Player? {
-        TODO("Not yet implemented")
-    }
-
-    private fun notifyPlayer(player: Player) {
-        try {
-            player0!!.send(getLobbyInfo())
-        } catch (e: IOException) {
-            player0!!.close()
-            queueLeave(player0!!)
-        }
-    }
-
-    private fun getLobbyInfo(): TicTacToePackets.LobbyStatus {
-        
+        return TicTacToePackets.LobbyInfo(
+            Info(name, isOpen, host?.name, player1?.name, player2?.name, ticTacToe?.getInfo())
+        )
     }
 
     override fun handleGameStart() {

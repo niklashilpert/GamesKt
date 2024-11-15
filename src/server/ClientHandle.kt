@@ -18,6 +18,7 @@ class ClientHandle(private val socket: Socket) : Closeable {
      */
     fun send(data: InetPacket) {
         dataOut.writeObject(data)
+        dataOut.reset()
     }
 
     /**
