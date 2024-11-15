@@ -89,6 +89,5 @@ class TicTacToe {
         }
     }
 
-    private fun inBounds(x: Int, y: Int) = x in 0..2 && y in 0..2
-
+    fun inBounds(x: Int, y: Int) = x in 0..2 && y in 0..2
 }

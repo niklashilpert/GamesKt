@@ -3,6 +3,7 @@ package server.lobby
 import server.DataPacket
 import server.Player
 import server.InetPacket
+import server.ResultCode
 
 abstract class TwoPlayerLobby(name: String) : Lobby(name, 2) {
     abstract class Info(
@@ -24,33 +25,34 @@ abstract class TwoPlayerLobby(name: String) : Lobby(name, 2) {
         return if (!super.handleIncomingPacket(packet, source)) {
             when (packet) {
                 is InetPacket.SwapPlayers -> {
-                    handleIfOpen(source) {
-                        queuePlayerSwap(source)
-                        true
-                    }
+                    queue(PlayerSwapTask(source))
+                    true
                 }
-
-                else -> false
+                else -> {
+                    false
+                }
             }
         } else true
     }
 
-    private fun queuePlayerSwap(source: Player) {
-        taskQueue.put(PlayerSwapTask(source))
-    }
-
     private fun performPlayerSwap(task: Task): Boolean {
-        return handleIfHost(task.source) {
-            handleIfOpen(task.source) {
-                val tmp = player1
-                player1 = player2
-                player2 = tmp
-                true
-            }
+        val source = task.source
+        if (host != source) {
+            source.tryRespond(ResultCode.NOT_AUTHORIZED)
+            return false
+        } else if (!isOpen) {
+            source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
+            return false
+        } else {
+            val tmp = player1
+            player1 = player2
+            player2 = tmp
+            source.tryRespond(ResultCode.SUCCESS)
+            return true
         }
     }
 
-    override fun put(player: Player) {
+    override fun store(player: Player) {
         if (player1 == null) {
             player1 = player
         } else {
@@ -58,7 +60,7 @@ abstract class TwoPlayerLobby(name: String) : Lobby(name, 2) {
         }
     }
 
-    override fun pop(player: Player) {
+    override fun remove(player: Player) {
         if (player1 == player) {
             player1 = null
         } else if (player2 == player) {

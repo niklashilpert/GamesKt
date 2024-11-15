@@ -1,7 +1,6 @@
 package server.lobby
 
 import server.*
-import java.io.IOException
 import java.io.Serializable
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -26,11 +25,11 @@ fun createLobby(type: GameType, name: String) : Lobby {
     }
 }
 
-
 abstract class Lobby internal constructor(val name: String, private val maxPlayerCount: Int) {
     abstract class Info(val lobbyName: String, val isOpen: Boolean, val host: String?) : Serializable
 
     abstract inner class Task(val source: Player, val perform: (Task) -> Boolean)
+
     protected inner class JoinTask(source: Player) : Task(source, ::performJoin)
     protected inner class LeaveTask(source: Player) : Task(source, ::performLeave)
     protected inner class StartGameTask(source: Player) : Task(source, ::performStartGame)
@@ -42,9 +41,9 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
         get() = _isOpen.get()
         protected set(value) = _isOpen.set(value)
 
-    protected val taskQueue = LinkedBlockingQueue<Task>()
     protected var host: Player? = null
 
+    private val taskQueue = LinkedBlockingQueue<Task>()
     private var keepTaskThreadRunning = AtomicBoolean(true)
     private val taskThread: Thread = createTaskHandlerThread().also { it.start() }
 
@@ -71,17 +70,13 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     private fun createPlayerListeningThread(player: Player): Thread {
         return Thread {
             while(!player.isClosed) {
-                try {
-                    val packet = player.read()
-                    if (!handleIncomingPacket(packet, player)) {
-                        player.send(InetPacket.IllegalPacket())
-                    }
-                } catch (e: IOException) {
-                    player.close()
+                val packet = player.tryRead()
+                if (packet != null) {
+                    handleIncomingPacket(packet, player)
                 }
             }
-            log("Stopped player listening thread for ${player.name}")
-            queueLeave(player)
+            log("${player.name} lost connection.")
+            queue(LeaveTask(player))
         }
     }
 
@@ -91,11 +86,11 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     protected open fun handleIncomingPacket(packet: DataPacket, source: Player): Boolean {
         return when (packet) {
             is InetPacket.StartGame -> {
-                queueGameStart(source)
+                queue(StartGameTask(source))
                 true
             }
             is InetPacket.StopGame -> {
-                queueGameStop(source)
+                queue(StopGameTask(source))
                 true
             }
             else -> {
@@ -114,32 +109,11 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
      * - the lobby is already playing
      */
     fun queueJoin(player: Player) {
-        taskQueue.put(JoinTask(player))
+        queue(JoinTask(player))
     }
 
-    /**
-     * Queues a player leave task.
-     */
-    protected fun queueLeave(player: Player) {
-        val isNotMarkedForDeletion = taskQueue.find { it is LeaveTask && it.source == player } == null
-        if (isNotMarkedForDeletion) {
-            taskQueue.put(LeaveTask(player))
-        }
-    }
-
-    /**
-     * Queues a game start task if the player is the host.
-     */
-    private fun queueGameStart(player: Player) {
-        taskQueue.put(StartGameTask(player))
-    }
-
-    /**
-     * Queues a game stop task if the player is the host.
-     * The stop task will also be queued if player is null.
-     */
-    private fun queueGameStop(player: Player) {
-        taskQueue.put(StopGameTask(player))
+    protected fun queue(task: Task) {
+        taskQueue.put(task)
     }
     
     /**
@@ -149,27 +123,31 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     private fun performJoin(task: Task): Boolean {
         val source = task.source
         if (getPlayers().find { it.name == source.name } != null) {
-            source.send(InetPacket.PlayerExists())
+            source.tryRespond(ResultCode.PLAYER_EXISTS)
             source.close()
             return false
         } else if (isFull()) {
-            source.send(InetPacket.LobbyIsFull())
+            source.tryRespond(ResultCode.LOBBY_IS_FULL)
             source.close()
             return false
         } else if (!isOpen) {
-            source.send(InetPacket.LobbyIsPlaying())
+            source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
             source.close()
             return false
         } else {
-            if (host == null) {
-                host = source
-            }
-            createPlayerListeningThread(source).start()
-            source.send(InetPacket.Success())
-            put(source)
-            log("Player ${source.name} joined lobby $name.")
+            performJoinUnchecked(source)
+            source.tryRespond(ResultCode.SUCCESS)
             return true
         }
+    }
+
+    private fun performJoinUnchecked(source: Player) {
+        if (host == null) {
+            host = source
+        }
+        createPlayerListeningThread(source).start()
+        store(source)
+        log("Player ${source.name} joined lobby $name.")
     }
 
     /**
@@ -179,10 +157,12 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
      * If the lobby's game was in progress, it is interrupted and the lobby returns to the open state.
      */
     private fun performLeave(task: Task): Boolean {
-        if (!isOpen) performStopGameUnchecked()
         val source = task.source
         if (getPlayers().contains(source)) {
-            pop(source)
+            if (!isOpen) {
+                performStopGameUnchecked()
+            }
+            remove(source)
             log("Player ${source.name} left lobby $name.")
             if (source == host) {
                 host = getPlayers().getOrNull(0)
@@ -204,29 +184,42 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     private fun performStartGame(task: Task): Boolean {
         val source = task.source
 
-        return handleIfHost(source) {
-            if (!isOpen) return@handleIfHost false
-            if (isFull()) {
-                log("Starting game")
-                isOpen = false
-                handleGameStart()
-                return@handleIfHost true
+        if (source == host) {
+            if (!isOpen) {
+                source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
+                return false
+            } else if (!isFull()){
+                source.tryRespond(ResultCode.LOBBY_IS_NOT_FULL)
+                return false
             } else {
-                try {
-                    source.send(InetPacket.CannotStartGame())
-                } catch (e: IOException) {
-                    source.close()
-                }
-                return@handleIfHost false
+                performStartGameUnchecked()
+                source.tryRespond(ResultCode.SUCCESS)
+                return true
             }
+        } else {
+            source.tryRespond(ResultCode.NOT_AUTHORIZED)
+            return false
         }
     }
-    
+
+    private fun performStartGameUnchecked() {
+        log("Starting game")
+        isOpen = false
+        handleGameStart()
+    }
+
     private fun performStopGame(task: Task): Boolean {
-        return handleIfHost(task.source) {
-            if (isOpen) return@handleIfHost false
+        val source = task.source
+        if (host != source) {
+            source.tryRespond(ResultCode.NOT_AUTHORIZED)
+            return false
+        } else if (isOpen) {
+            source.tryRespond(ResultCode.LOBBY_IS_OPEN)
+            return false
+        } else {
             performStopGameUnchecked()
-            return@handleIfHost true
+            source.tryRespond(ResultCode.SUCCESS)
+            return true
         }
     }
 
@@ -260,12 +253,12 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     /**
      * Stores the player in an implementation specific object.
      */
-    protected abstract fun put(player: Player)
+    protected abstract fun store(player: Player)
 
     /**
      * Removes the player from the implementation specific storage.
      */
-    protected abstract fun pop(player: Player)
+    protected abstract fun remove(player: Player)
 
     /**
      * Notifies all stored players.
@@ -276,15 +269,11 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
         }
     }
 
+    /**
+     * Sends a lobby update packet to the player.
+     */
     private fun notifyPlayer(player: Player) {
-        if (!player.isClosed) {
-            log("Notifying player")
-            try {
-                player.send(getLobbyInfoPacket())
-            } catch (e: IOException) {
-                player.close()
-            }
-        }
+        player.trySend(getLobbyInfoPacket())
     }
 
     /**
@@ -300,45 +289,6 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     }
 
     /**
-     * Only performs the provided action if the player is the host of the lobby.
-     * If not, this method sends a NotAuthorized packet to the player.
-     *
-     * If the provided player is null, the action is executed.
-     */
-    protected fun handleIfHost(player: Player, action: (Player) -> Boolean): Boolean {
-        if (player == host) {
-            return action(player)
-        } else {
-            player.send(InetPacket.NotAuthorized())
-            return false
-        }
-    }
-
-    /**
-     * This function returns false if the lobby is open. Will execute the action and return true otherwise.
-     */
-    protected fun handleIfRunning(source: Player, action: () -> Boolean): Boolean {
-        return if (!isOpen) {
-            action()
-            true
-        } else {
-            false
-        }
-    }
-
-    /**
-     * This function returns false if the game is running. Will execute the action and return true otherwise.
-     */
-    protected fun handleIfOpen(source: Player, action: () -> Boolean): Boolean {
-        return if (isOpen) {
-            action()
-            true
-        } else {
-            false
-        }
-    }
-
-    /**
      * Stops the task thread and removes the lobby from the game server's registry.
      */
     private fun terminateLobby() {
@@ -350,5 +300,4 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     protected fun log(msg: String) {
         println("[$name] $msg")
     }
-    
 }

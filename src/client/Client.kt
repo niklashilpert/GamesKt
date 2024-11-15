@@ -46,12 +46,14 @@ fun main(args: Array<String>) {
                     }
 
 
+                } else if (packet is InetPacket.Result){
+                    println(packet.code)
                 } else {
                     println(packet)
                 }
             }
         } catch (e: IOException) {
-            e.printStackTrace()
+            println(e.javaClass.simpleName + " " + (e.message ?: ""))
             println("Stopping thread")
         }
     }.start()
