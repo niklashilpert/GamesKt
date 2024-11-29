@@ -6,15 +6,23 @@ import server.InetPacket
 import server.ResultCode
 
 abstract class TwoPlayerLobby(name: String) : Lobby(name, 2) {
-    abstract class Info(
-        lobbyName: String,
-        isOpen: Boolean,
-        host: String?,
-        val player1: String?,
-        val player2: String?
-    ) : Lobby.Info(lobbyName, isOpen, host)
-
-    protected inner class PlayerSwapTask(source: Player) : Task(source, ::performPlayerSwap)
+    protected inner class PlayerSwapTask(private val source: Player) : Task() {
+        override fun perform(): Boolean {
+            if (host != source) {
+                source.tryRespond(ResultCode.NOT_AUTHORIZED)
+                return false
+            } else if (!isOpen) {
+                source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
+                return false
+            } else {
+                val tmp = player1
+                player1 = player2
+                player2 = tmp
+                source.tryRespond(ResultCode.SUCCESS)
+                return true
+            }
+        }
+    }
 
     var player1: Player? = null
         private set
@@ -33,23 +41,6 @@ abstract class TwoPlayerLobby(name: String) : Lobby(name, 2) {
                 }
             }
         } else true
-    }
-
-    private fun performPlayerSwap(task: Task): Boolean {
-        val source = task.source
-        if (host != source) {
-            source.tryRespond(ResultCode.NOT_AUTHORIZED)
-            return false
-        } else if (!isOpen) {
-            source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
-            return false
-        } else {
-            val tmp = player1
-            player1 = player2
-            player2 = tmp
-            source.tryRespond(ResultCode.SUCCESS)
-            return true
-        }
     }
 
     override fun store(player: Player) {

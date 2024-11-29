@@ -28,13 +28,94 @@ fun createLobby(type: GameType, name: String) : Lobby {
 abstract class Lobby internal constructor(val name: String, private val maxPlayerCount: Int) {
     abstract class Info(val lobbyName: String, val isOpen: Boolean, val host: String?) : Serializable
 
-    abstract inner class Task(val source: Player, val perform: (Task) -> Boolean)
+    abstract inner class Task {
+        abstract fun perform(): Boolean
+    }
 
-    protected inner class JoinTask(source: Player) : Task(source, ::performJoin)
-    protected inner class LeaveTask(source: Player) : Task(source, ::performLeave)
-    protected inner class StartGameTask(source: Player) : Task(source, ::performStartGame)
-    protected inner class StopGameTask(source: Player) : Task(source, ::performStopGame)
-    protected inner class UpdatePlayerTask(source: Player): Task(source, ::performPlayerUpdate)
+    protected inner class JoinTask(private val source: Player) : Task() {
+        override fun perform(): Boolean {
+            if (getPlayers().find { it.name == source.name } != null) {
+                source.tryRespond(ResultCode.PLAYER_EXISTS)
+                source.close()
+                return false
+            } else if (isFull()) {
+                source.tryRespond(ResultCode.LOBBY_IS_FULL)
+                source.close()
+                return false
+            } else if (!isOpen) {
+                source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
+                source.close()
+                return false
+            } else {
+                joinPlayer(source)
+                source.tryRespond(ResultCode.SUCCESS)
+                return true
+            }
+        }
+    }
+    protected inner class LeaveTask(private val source: Player) : Task() {
+        override fun perform(): Boolean {
+            if (getPlayers().contains(source)) {
+                if (!isOpen) {
+                    stopGame()
+                }
+                remove(source)
+                log("Player ${source.name} left lobby $name.")
+                if (source == host) {
+                    host = getPlayers().getOrNull(0)
+                    if (host != null) {
+                        log("Player ${host!!.name} is now host of lobby $name.")
+                    } else {
+                        terminateLobby()
+                    }
+                }
+                return true
+            }
+            return false
+        }
+    }
+    protected inner class StartGameTask(private val source: Player) : Task() {
+        override fun perform(): Boolean {
+            if (source == host) {
+                if (!isOpen) {
+                    source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
+                    return false
+                } else if (!isFull()){
+                    source.tryRespond(ResultCode.LOBBY_IS_NOT_FULL)
+                    return false
+                } else {
+                    startGame()
+                    source.tryRespond(ResultCode.SUCCESS)
+                    return true
+                }
+            } else {
+                source.tryRespond(ResultCode.NOT_AUTHORIZED)
+                return false
+            }
+        }
+    }
+    protected inner class StopGameTask(private val source: Player) : Task() {
+        override fun perform(): Boolean {
+            if (host != source) {
+                source.tryRespond(ResultCode.NOT_AUTHORIZED)
+                return false
+            } else if (isOpen) {
+                source.tryRespond(ResultCode.LOBBY_IS_OPEN)
+                return false
+            } else {
+                stopGame()
+                source.tryRespond(ResultCode.SUCCESS)
+                return true
+            }
+        }
+    }
+    protected inner class NotifyTask(private val source: Player): Task() {
+        override fun perform(): Boolean {
+            log("Updating ${source.name}")
+            notifyPlayer(source)
+            return false
+        }
+    }
 
     private var _isOpen = AtomicBoolean(true)
     var isOpen
@@ -53,7 +134,7 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
                 try {
                     val nextTask = taskQueue.take()
                     log("Next task in queue: ${nextTask.javaClass.simpleName}")
-                    val notify = nextTask.perform(nextTask)
+                    val notify = nextTask.perform()
                     if (notify) notifyPlayers()
                 } catch (e: InterruptedException) {
                     keepTaskThreadRunning.set(false)
@@ -85,6 +166,10 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
      */
     protected open fun handleIncomingPacket(packet: DataPacket, source: Player): Boolean {
         return when (packet) {
+            is InetPacket.StatusRequest -> {
+                queue(NotifyTask(source))
+                true
+            }
             is InetPacket.StartGame -> {
                 queue(StartGameTask(source))
                 true
@@ -116,32 +201,9 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
         taskQueue.put(task)
     }
     
-    /**
-     * Adds the player to the players list if it is allowed.
-     * The player will be notified if it can't join the lobby.
-     */
-    private fun performJoin(task: Task): Boolean {
-        val source = task.source
-        if (getPlayers().find { it.name == source.name } != null) {
-            source.tryRespond(ResultCode.PLAYER_EXISTS)
-            source.close()
-            return false
-        } else if (isFull()) {
-            source.tryRespond(ResultCode.LOBBY_IS_FULL)
-            source.close()
-            return false
-        } else if (!isOpen) {
-            source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
-            source.close()
-            return false
-        } else {
-            performJoinUnchecked(source)
-            source.tryRespond(ResultCode.SUCCESS)
-            return true
-        }
-    }
 
-    private fun performJoinUnchecked(source: Player) {
+
+    private fun joinPlayer(source: Player) {
         if (host == null) {
             host = source
         }
@@ -150,89 +212,17 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
         log("Player ${source.name} joined lobby $name.")
     }
 
-    /**
-     * Removes the player from the players list.
-     * If they are the host, the next host candidate is promoted.
-     * If they are the last player in the lobby, it will be terminated.
-     * If the lobby's game was in progress, it is interrupted and the lobby returns to the open state.
-     */
-    private fun performLeave(task: Task): Boolean {
-        val source = task.source
-        if (getPlayers().contains(source)) {
-            if (!isOpen) {
-                performStopGameUnchecked()
-            }
-            remove(source)
-            log("Player ${source.name} left lobby $name.")
-            if (source == host) {
-                host = getPlayers().getOrNull(0)
-                if (host != null) {
-                    log("Player ${host!!.name} is now host of lobby $name.")
-                } else {
-                    terminateLobby()
-                }
-            }
-            return true
-        }
-        return false
-    }
 
-    /**
-     * Tries to start the game if it can.
-     * Sends an error to back to the client if it can't start.
-     */
-    private fun performStartGame(task: Task): Boolean {
-        val source = task.source
-
-        if (source == host) {
-            if (!isOpen) {
-                source.tryRespond(ResultCode.LOBBY_IS_PLAYING)
-                return false
-            } else if (!isFull()){
-                source.tryRespond(ResultCode.LOBBY_IS_NOT_FULL)
-                return false
-            } else {
-                performStartGameUnchecked()
-                source.tryRespond(ResultCode.SUCCESS)
-                return true
-            }
-        } else {
-            source.tryRespond(ResultCode.NOT_AUTHORIZED)
-            return false
-        }
-    }
-
-    private fun performStartGameUnchecked() {
+    private fun startGame() {
         log("Starting game")
         isOpen = false
         handleGameStart()
     }
 
-    private fun performStopGame(task: Task): Boolean {
-        val source = task.source
-        if (host != source) {
-            source.tryRespond(ResultCode.NOT_AUTHORIZED)
-            return false
-        } else if (isOpen) {
-            source.tryRespond(ResultCode.LOBBY_IS_OPEN)
-            return false
-        } else {
-            performStopGameUnchecked()
-            source.tryRespond(ResultCode.SUCCESS)
-            return true
-        }
-    }
-
-    protected fun performStopGameUnchecked() {
+    private fun stopGame() {
         log("Stopping game")
         handleGameStop()
         isOpen = true
-    }
-
-    private fun performPlayerUpdate(task: Task): Boolean {
-        log("Updating ${task.source.name}")
-        notifyPlayer(task.source)
-        return false
     }
 
     /**
@@ -246,7 +236,7 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     protected abstract fun handleGameStop()
 
     /**
-     * Returns a LobbyInfo packet that can be sent to notify clients abount updates.
+     * Returns a LobbyInfo packet that can be sent to notify clients about updates.
      */
     protected abstract fun getLobbyInfoPacket(): InetPacket.LobbyInfo
 
@@ -284,7 +274,7 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
     /**
      * Returns whether the maximum player amount has been reached.
      */
-    protected fun isFull(): Boolean {
+    private fun isFull(): Boolean {
         return getPlayers().size == maxPlayerCount
     }
 
@@ -297,7 +287,7 @@ abstract class Lobby internal constructor(val name: String, private val maxPlaye
         GameServer.removeLobby(this)
     }
 
-    protected fun log(msg: String) {
+    private fun log(msg: String) {
         println("[$name] $msg")
     }
 }

@@ -11,6 +11,8 @@ import java.net.Socket
 
 fun main(args: Array<String>) {
     val name = args[0]
+    val clientManager = ClientManager()
+
     println("Connecting...")
     val socket = Socket()
     socket.connect(InetSocketAddress("127.0.0.1", 6666))
@@ -28,7 +30,7 @@ fun main(args: Array<String>) {
                     val info = packet.lobbyInfo
                     if (!info.isOpen) {
                         val inGameInfo = info.ticTacToeInfo
-                        println("Running: ${info.lobbyName}[${info.host}] - ${info.player1} vs. ${info.player2}")
+                        println("Running: ${info.lobbyName}[${info.host}] - ${info.playerXName} vs. ${info.playerOName}")
                         printBoard(inGameInfo!!.board)
                         if (inGameInfo.tie) {
                             println("TIE")
@@ -36,13 +38,13 @@ fun main(args: Array<String>) {
                             println("X WON")
                         } else if (inGameInfo.oWon) {
                             println("O WON")
-                        } else if (inGameInfo.currentPlayerIsX == (name == info.player1)) {
+                        } else if (inGameInfo.currentPlayerIsX == (name == info.playerXName)) {
                             println("Your turn")
                         } else {
                             println("Enemy's turn")
                         }
                     } else {
-                        println("${info.lobbyName}, ${info.isOpen}, ${info.host}, ${info.player1}, ${info.player2}")
+                        println("${info.lobbyName}, ${info.isOpen}, ${info.host}, ${info.playerXName}, ${info.playerOName}")
                     }
 
 
@@ -60,6 +62,9 @@ fun main(args: Array<String>) {
 
     while(true) {
         val cmd = readln()
+
+
+
         when (cmd) {
             "swap" -> dataOut.writeObject(InetPacket.SwapPlayers())
             "exit" -> {
@@ -68,6 +73,7 @@ fun main(args: Array<String>) {
                 socket.close()
             }
             "start" -> dataOut.writeObject(InetPacket.StartGame())
+            "u" -> dataOut.writeObject(InetPacket.StatusRequest())
             "stop" -> dataOut.writeObject(InetPacket.StopGame())
             else -> {
                 if (cmd.startsWith("place")) {

@@ -32,9 +32,9 @@ abstract class InetPacket : DataPacket(), Serializable {
 
     class Result(val code: ResultCode) : InetPacket()
 
-
     // Sent from client
     class Connect(val playerName: String, val lobbyName: String, val gameType: GameType) : InetPacket()
+    class StatusRequest : InetPacket()
 
     class StartGame : InetPacket()
     class StopGame : InetPacket()
